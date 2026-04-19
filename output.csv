@@ -1,0 +1,7 @@
+filename,prediction,confidence
+Diabetes/37_DM.010_1.bmp,Sklerosis,58.96115303039551
+Diabetes/37_DM.012_1.bmp,Glaucoma,44.22104358673096
+Diabetes/37_DM.013_1.bmp,Glaucoma,48.8069623708725
+Diabetes/37_DM_.bmp,null,null
+Diabetes/37_DM_1.bmp,Diabetes,71.22679948806763
+Diabetes/DM_01.03.2024_LO.001_1.bmp,Healthy,0.7524429857730865

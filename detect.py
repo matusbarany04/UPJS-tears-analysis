@@ -2,7 +2,8 @@
 import argparse
 import sys
 import scipy
-
+from seaborn._marks import area
+from sympy.sets import conditionset
 
 CLASSES = [
     "Diabetes",
@@ -28,6 +29,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import joblib
+import os
 
 
 def box_counting_fractal_dimension(image_array):
@@ -317,18 +319,6 @@ class TearPredictor:
         self.disease_names = ['Diabetes', 'Sklerosis', 'Glaucoma', 'Dry Eye']
 
     def get_data(self, image_path):
-        def normalize(image):
-            new_w = int(281.0)
-            new_h = int(281.0)
-
-            resized = cv2.resize(
-                image,
-                (new_w, new_h),
-                interpolation=cv2.INTER_NEAREST
-            )
-
-            return resized
-
         def load_image(image_path):
             # load is np gray scale array
             img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
@@ -350,7 +340,7 @@ class TearPredictor:
         def crop_image(image_to_crop, top=10, bottom=575 - 45, left=94, right=704 - 90):
             return image_to_crop[top:bottom, left:right]
 
-        img = normalize(crop_image(load_image(image_path)))
+        img = normalize(crop_image(load_image(image_path)),image_path)
 
         processed, skell = process_skeleton(img)
 
@@ -405,7 +395,9 @@ class TearPredictor:
 
             # Using 0.5 as threshold, but you can adjust this if you want to be more sensitive
             if is_sick_prob < 0.65:
-                return f"Diagnosis: Healthy (Confidence: {(1.0 - is_sick_prob) * 100:.1f}%)"
+                print("Patient is healthy, he can go home play videogames!")
+                return "Healthy", (1.0 - is_sick_prob)
+                return
             else:
                 print(
                     f"Patient is likely sick (Confidence: {is_sick_prob * 100:.1f}%), running Stage 2 for detailed diagnosis...")
@@ -419,7 +411,8 @@ class TearPredictor:
             max_prob, predicted_class_idx = torch.max(disease_probs, 0)
             diagnosis = self.disease_names[predicted_class_idx.item()]
 
-            return f"Diagnosis: {diagnosis} (Confidence: {max_prob.item() * 100:.1f}%)"
+
+            return diagnosis, max_prob.item() * 100
 
 def branching_factor(skeleton):
     skel = skeleton.astype(np.uint8)
@@ -480,18 +473,55 @@ def load_image(image_path):
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     return img
 
+def normalize(img, image_path, target=50000.0):
 
-def normalize(image):
-    new_w = int(281.0)
-    new_h = int(281.0)
+    def load_real_size(path) -> float:
+        with open(path.replace("_1.bmp", ""), "r", encoding="latin1", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
 
-    resized = cv2.resize(
-        image,
-        (new_w, new_h),
-        interpolation=cv2.INTER_NEAREST
-    )
+                if line.startswith(r"\Scan Size:"):
+                    # example: \Scan Size: 92516.8 nm
+                    parts = line.split(":")[1].strip().split()
+                    return float(parts[0])  # value in nm
 
-    return resized
+        assert False
+
+    area = load_real_size(image_path)
+
+    ratio = target / area  # >1 enlarge, <1 shrink
+    h, w = img.shape[:2]
+
+    # # -------------------------
+    # # 1. SCALE UP (small images)
+    # # -------------------------
+    # # 385 is aproximately  50000/92500
+    if area < 51000:
+        new_w = int(281.0)
+        new_h = int(281.0)
+
+        resized = cv2.resize(
+            img,
+            (new_w, new_h),
+            interpolation=cv2.INTER_NEAREST
+        )
+        return resized
+    # # -------------------------
+    # 2. CROP (large images)
+    # -------------------------
+    else:
+        new_w = int(w * ratio)
+        new_h = int(h * ratio)
+        # center crop
+        start_x = (w - new_w) // 2
+        start_y = (h - new_h) // 2
+
+        cropped_center = img[
+            start_y:start_y + new_h,
+            start_x:start_x + new_w
+        ]
+
+        return cropped_center
 
 
 def save_image(img: np.ndarray, filename: str, out_dir="./"):
@@ -701,7 +731,70 @@ def fft_metric(cropped_image):
 
     return pixels_in_cross / (total_white_pixels + 1e-10)
 
+def load_real_size(path) -> float:
+    with open(path, "r", encoding="latin1", errors="ignore") as f:
+        for line in f:
+            line = line.strip()
 
+            if line.startswith(r"\Scan Size:"):
+                # example: \Scan Size: 92516.8 nm
+                parts = line.split(":")[1].strip().split()
+                return float(parts[0])  # value in nm
+
+    assert False
+
+def run_tests(folder):
+    # loading images and filtering if metadata are available
+    images: list = []
+    filenames: list = []
+
+
+    for filename in sorted(os.listdir(folder)):
+        if filename.lower().endswith(".bmp"):
+            # // check  if there exists a file called filename + "_1.bmp"
+            meta_path = os.path.join(folder, filename.replace("_1.bmp", ""))
+
+
+            if not os.path.exists(meta_path):
+                print(f"[BAD] {meta_path} doesnt exist!!")
+                continue
+
+            full_path = os.path.join(folder, filename)
+            img = cv2.imread(full_path, cv2.IMREAD_GRAYSCALE)
+
+            if img is not None:
+                filenames.append(full_path)
+
+
+    # Initialize the predictor once when your app starts
+    predictor = TearPredictor(
+        binary_weights_path='./stage1_healthy72_unhealthy96.pth',
+        disease_weights_path='./stage2_4class_disease_model.pth',
+        scaler_stage1_path='./scaler_stage1.joblib',
+        scaler_stage2_path='./scaler_stage2.joblib'
+    )
+
+    warnings.filterwarnings("ignore")
+
+    import csv
+
+    with open("./output.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+
+        writer.writerow(["filename", "prediction", "confidence"])
+
+        for filename in filenames:
+            try:
+                if filename.lower().endswith(".bmp"):
+
+                    if not os.path.exists(filename):
+                        writer.writerow([filename, "null", "null"])
+                        continue
+
+                    prediction, confidence = predictor.predict(filename)
+                    writer.writerow([filename, prediction, confidence])
+            except Exception:
+                writer.writerow([filename, "null", "null"])
 def classify(
         input_path: str,
         want_skeleton=False,
@@ -721,7 +814,7 @@ def classify(
 
     warnings.filterwarnings("ignore")
 
-    img = normalize(crop_image(load_image(input_path)))
+    img = normalize(crop_image(load_image(input_path)),input_path)
     processed, skell = process_skeleton(img)
 
     result = {}
@@ -752,6 +845,13 @@ def main():
         help="Path to input image"
     )
 
+    parser.add_argument(
+        "--test-folder",
+        type=str,
+        required=False,
+        help="Path to input folder"
+    )
+
     # feature flags
     parser.add_argument("--skeleton", action="store_true")
     parser.add_argument("--binary", action="store_true")
@@ -761,9 +861,11 @@ def main():
     parser.add_argument("--fft", action="store_true")
 
     args = parser.parse_args()
-
+    if args.test_folder:
+        run_tests(args.test_folder)
+        exit(0)
     if not args.input_file or not os.path.exists(args.input_file):
-        print("Error: file does not exist", file=sys.stderr)
+        print(f"Error: file does not exist f{args.input_file}", file=sys.stderr)
         sys.exit(1)
     try:
         result = classify(
