@@ -310,7 +310,7 @@ class TearPredictor:
         self.stage1_model.eval()  # Lock for inference
 
         # 3. Load Stage 2 Model (Disease: 4 outputs)
-        self.stage2_model = TearCrystalNet(num_features=9, num_classes=4).to(self.device)
+        self.stage2_model = TearCrystalNet(num_features=2, num_classes=4).to(self.device)
         self.stage2_model.load_state_dict(torch.load(disease_weights_path, map_location=self.device))
         self.stage2_model.eval()  # Lock for inference
 
@@ -374,8 +374,7 @@ class TearPredictor:
             ]])
         else:
             raw_features = np.array([[
-                fft_val, fd_bin, fd_skel, glob_ent_bin, loc_ent_bin,
-                glob_ent_skel, loc_ent_skel, n_comps, n_spots
+                n_comps, n_spots
             ]])
 
         # Scale the features
